@@ -17,6 +17,7 @@ library(spdep)
 odnew <- st_read(here::here("od.csv"))
 z <- st_read(here::here("statistical-gis-boundaries-london","ESRI","MSOA_2011_London_gen_MHW.shp"))
 #summarize origin data
+#the public transport mode can be replace
 output1 <- odnew %>%
   group_by(geo_code1) %>%
   summarize(sum = sum(light_rail))
