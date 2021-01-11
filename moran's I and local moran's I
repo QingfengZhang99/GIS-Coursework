@@ -1,0 +1,155 @@
+library(spatstat)
+library(here)
+library(sp)
+library(rgeos)
+library(maptools)
+library(GISTools)
+library(tmap)
+library(sf)
+library(geojson)
+library(geojsonio)
+library(tmaptools)
+library(stringr)
+library(tidyverse)
+library(sf)
+library(spdep)
+#read data
+odnew <- st_read(here::here("od.csv"))
+z <- st_read(here::here("statistical-gis-boundaries-london","ESRI","MSOA_2011_London_gen_MHW.shp"))
+#summarize origin data
+output1 <- odnew %>%
+  group_by(geo_code1) %>%
+  summarize(sum = sum(light_rail))
+#summarize destination data
+output2 <- odnew %>%
+  group_by(geo_code2) %>%
+  summarize(sum = sum(light_rail))
+#replace geometry attribute from point to polygon
+st_geometry(output1) <- NULL
+o <- z
+d <- z
+o <- o %>% 
+  left_join(output1, 
+            by = c("MSOA11CD" = "geo_code1"))%>%
+  distinct(MSOA11CD, geometry,sum)
+
+st_geometry(output2) <- NULL
+d <- z %>% 
+  left_join(output2, 
+            by = c("MSOA11CD" = "geo_code2"))%>%
+  distinct(MSOA11CD, geometry,sum)
+#relplace NA
+o[is.na(o)] <- 0
+d[is.na(d)] <- 0
+st_crs(o)
+st_crs(d)
+points_o_joined <- o 
+#calculate area
+points_o_joined <- mutate(o,area=st_area(geometry)) 
+#then density of the points per ward
+points_o_joined <- mutate(points_o_joined,density=sum/area) 
+
+points_d_joined <- d 
+#calculate area
+points_d_joined <- mutate(d,area=st_area(geometry)) 
+#then density of the points per ward
+points_d_joined <- mutate(points_d_joined,density=sum/area) 
+
+#First calculate the centroids
+coordsW_o <- points_o_joined%>%
+  st_centroid()%>%
+  st_geometry()
+plot(coordsW_o,axes=TRUE)
+
+coordsW_d <- points_d_joined%>%
+  st_centroid()%>%
+  st_geometry()
+plot(coordsW_d,axes=TRUE) 
+#create a neighbours list
+points_o_test <- points_o_joined
+points_o_test <- na.omit(points_o_test)
+LWard_nb_o <- points_o_test
+LWard_nb_o <- poly2nb(LWard_nb_o, queen=T , snap = 0.0001)
+
+points_d_test <- points_d_joined
+points_d_test <- na.omit(points_d_test)
+LWard_nb_d <- points_d_test
+LWard_nb_d <- poly2nb(LWard_nb_d, queen=T , snap = 0.0001)
+#add a map underneath
+plot(points_o_joined$geometry, add=T)
+Lward.lw.o<- LWard_nb_o%>%
+  nb2listw(., style="C",zero.policy = T)
+
+plot(points_d_joined$geometry, add=T)
+Lward.lw.d<- LWard_nb_d%>%
+  nb2listw(., style="C",zero.policy = T)
+#moran test
+I_LWard_Global_Density_o <- points_o_test %>%
+  pull(sum) %>%
+  as.vector()%>%
+  moran.test(., Lward.lw.o)
+
+I_LWard_Global_Density_o
+
+I_LWard_Global_Density_d <- points_d_test %>%
+  pull(sum) %>%
+  as.vector()%>%
+  moran.test(., Lward.lw.d)
+
+I_LWard_Global_Density_d
+
+#use the localmoran function to generate I for each ward in the city
+I_LWard_Local_count_o <- points_o_test %>%
+  pull(sum) %>%
+  as.vector()%>%
+  localmoran(., Lward.lw.o)%>%
+  as_tibble()
+I_LWard_Local_Density_o <- points_o_test %>%
+  pull(density) %>%
+  as.vector()%>%
+  localmoran(., Lward.lw.o)%>%
+  as_tibble()
+
+I_LWard_Local_count_d <- points_d_test %>%
+  pull(sum) %>%
+  as.vector()%>%
+  localmoran(., Lward.lw.d)%>%
+  as_tibble()
+I_LWard_Local_Density_d <- points_d_test %>%
+  pull(density) %>%
+  as.vector()%>%
+  localmoran(., Lward.lw.d)%>%
+  as_tibble()
+
+#visualize the output of local Moran's I object
+slice_head(I_LWard_Local_Density_o, n=5)
+points_o_test <- points_o_test %>%
+  mutate(plaque_count_I = as.numeric(I_LWard_Local_count_o$Ii))%>%
+  mutate(plaque_count_Iz =as.numeric(I_LWard_Local_count_o$Z.Ii))%>%
+  mutate(density_I =as.numeric(I_LWard_Local_Density_o$Ii))%>%
+  mutate(density_Iz =as.numeric(I_LWard_Local_Density_o$Z.Ii))
+breaks1<-c(-1000,-2.58,-1.96,-1.65,1.65,1.96,2.58,1000)
+MoranColours<- rev(brewer.pal(8, "RdGy"))
+tm_shape(points_o_test) +
+  tm_polygons("density_Iz",
+              style="fixed",
+              breaks=breaks1,
+              palette=MoranColours,
+              midpoint=NA,
+              title="Local Moran's I\nlight rail density\norigin")
+
+slice_head(I_LWard_Local_Density_d, n=5)
+points_d_test <- points_d_test %>%
+  mutate(plaque_count_I = as.numeric(I_LWard_Local_count_d$Ii))%>%
+  mutate(plaque_count_Iz =as.numeric(I_LWard_Local_count_d$Z.Ii))%>%
+  mutate(density_I =as.numeric(I_LWard_Local_Density_d$Ii))%>%
+  mutate(density_Iz =as.numeric(I_LWard_Local_Density_d$Z.Ii))
+breaks1<-c(-1000,-2.58,-1.96,-1.65,1.65,1.96,2.58,1000)
+MoranColours<- rev(brewer.pal(8, "RdGy"))
+tm_shape(points_d_test) +
+  tm_polygons("density_Iz",
+              style="fixed",
+              breaks=breaks1,
+              palette=MoranColours,
+              midpoint=NA,
+              title="Local Moran's I\nlight rail density\ndestination")
